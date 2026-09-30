@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Blockchain Transaction Tracker</title>
+    <meta
+      name="description"
+      content="Check live blockchain transaction status with a progress bar using free public APIs."
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="topbar">
+        <div class="brand-wrap">
+          <div class="brand-mark">₿</div>
+          <div>
+            <p class="eyebrow">Live status monitor</p>
+            <h1>Blockchain Transaction Tracker</h1>
+          </div>
+        </div>
+      </header>
+
+      <main class="app-card">
+        <form id="tracker-form" class="tracker-form">
+          <div class="field-group">
+            <label for="coin-select">Cryptocurrency</label>
+            <select id="coin-select" name="coin">
+              <option value="BTC">Bitcoin (BTC)</option>
+              <option value="ETH">Ethereum (ETH)</option>
+              <option value="USDT">Tether (USDT)</option>
+              <option value="SOL">Solana (SOL)</option>
+              <option value="BNB">BNB (BNB)</option>
+              <option value="ADA">Cardano (ADA)</option>
+              <option value="DOGE">Dogecoin (DOGE)</option>
+              <option value="XRP">XRP (XRP)</option>
+              <option value="TRX">TRON (TRX)</option>
+              <option value="LTC">Litecoin (LTC)</option>
+            </select>
+          </div>
+
+          <div class="field-group">
+            <label for="chain-select">Blockchain</label>
+            <select id="chain-select" name="chain"></select>
+          </div>
+
+          <div class="field-group">
+            <label for="tx-hash">Transaction ID / Hash</label>
+            <input
+              id="tx-hash"
+              name="txHash"
+              type="text"
+              autocomplete="off"
+              spellcheck="false"
+              placeholder="Paste transaction hash here"
+            />
+          </div>
+
+          <button type="submit" class="primary-btn">Check transaction</button>
+        </form>
+
+        <section class="result-panel" id="result-panel" aria-live="polite">
+          <div class="status-header">
+            <div>
+              <p class="label">Current status</p>
+              <h2 id="transaction-status">Waiting for a transaction</h2>
+            </div>
+            <div class="status-pill" id="status-pill">Idle</div>
+          </div>
+
+          <div class="progress-wrap">
+            <div class="progress-meta">
+              <span>Confirmation progress</span>
+              <strong id="progress-text">0%</strong>
+            </div>
+            <div class="progress-track" aria-label="confirmation progress">
+              <div class="progress-bar" id="progress-bar"></div>
+            </div>
+          </div>
+
+          <div class="stats-grid">
+            <div class="stat-box">
+              <span class="stat-label">Confirmations</span>
+              <strong id="confirmations">0</strong>
+            </div>
+            <div class="stat-box">
+              <span class="stat-label">Network</span>
+              <strong id="network-name">-</strong>
+            </div>
+            <div class="stat-box">
+              <span class="stat-label">Target</span>
+              <strong id="target-confirmations">-</strong>
+            </div>
+            <div class="stat-box">
+              <span class="stat-label">Block</span>
+              <strong id="block-height">-</strong>
+            </div>
+          </div>
+
+          <div class="meta-list">
+            <div>
+              <span>Transaction hash</span>
+              <strong id="tx-hash-display">-</strong>
+            </div>
+            <div>
+              <span>Explorer</span>
+              <a id="explorer-link" href="#" target="_blank" rel="noreferrer">View on explorer</a>
+            </div>
+            <div>
+              <span>Last update</span>
+              <strong id="last-update">Waiting</strong>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script src="script.js"></script>
+  </body>
+</html>
