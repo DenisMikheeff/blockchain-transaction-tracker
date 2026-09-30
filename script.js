@@ -2,8 +2,15 @@ const networks = {
   BTC: ['Bitcoin'], ETH: ['Ethereum'], USDT: ['Ethereum (ERC20)', 'TRON (TRC20)', 'BNB Smart Chain (BEP20)'], SOL: ['Solana'], BNB: ['BNB Smart Chain'], ADA: ['Cardano'], DOGE: ['Dogecoin'], XRP: ['XRP Ledger'], TRX: ['TRON'], LTC: ['Litecoin']
 };
 const targets = { BTC:6, ETH:12, USDT:12, SOL:12, BNB:12, ADA:20, DOGE:6, XRP:1, TRX:20, LTC:6 };
+const POLL_INTERVAL_INITIAL_MS = 10000;
+const POLL_INTERVAL_MID_MS = 25000;
+const POLL_INTERVAL_NEAR_MS = 60000;
+const POLL_RETRY_BASE_MS = 10000;
+const POLL_RETRY_MAX_MS = 40000;
+const MAX_MONITORING_MS = 15 * 60 * 1000;
 const $ = (id) => document.getElementById(id);
 const coin = $('coin-select'), chain = $('chain-select'), form = $('tracker-form'), button = form.querySelector('button');
+const poller = { active:false, timer:null, ticker:null, inFlight:false, context:null, startMs:0, nextAt:0, retryCount:0, lastUpdateMs:0 };
 function updateChains(){ chain.innerHTML = (networks[coin.value] || []).map(n => `<option>${n}</option>`).join(''); }
 function explorer(c,n,h){ const x=String(n).toLowerCase(); const urls={BTC:`https://www.blockchain.com/btc/tx/${h}`,ETH:`https://etherscan.io/tx/${h}`,USDT:x.includes('tron')?`https://tronscan.org/#/transaction/${h}`:x.includes('bep')?`https://bscscan.com/tx/${h}`:`https://etherscan.io/tx/${h}`,SOL:`https://solscan.io/tx/${h}`,BNB:`https://bscscan.com/tx/${h}`,ADA:`https://cardanoscan.io/transaction/${h}`,DOGE:`https://dogechain.info/tx/${h}`,XRP:`https://xrpscan.com/tx/${h}`,TRX:`https://tronscan.org/#/transaction/${h}`,LTC:`https://blockchair.com/litecoin/transaction/${h}`}; return urls[c] || '#'; }
 async function json(url, options={}){ const r=await fetch(url,{headers:{Accept:'application/json'},...options}); if(!r.ok) throw Error(`API ${r.status}`); return r.json(); }
@@ -11,9 +18,66 @@ function render(r,c,n,h){ const p=Math.max(0,Math.min(100,r.progress||0)); $('tr
 async function btc(h){ const [t,height]=await Promise.all([json(`https://mempool.space/api/tx/${h}`),json('https://mempool.space/api/blocks/tip/height')]); const ok=!!t.status?.confirmed, conf=ok?Math.max(0,Number(height)-Number(t.status.block_height)+1):0; return {status:ok?'Confirmed':'Pending',confirmations:conf,target:6,block:ok?t.status.block_height:'-',network:'Bitcoin',progress:Math.min(conf/6*100,100)}; }
 async function blockscout(h,network,c){ const t=await json(`https://eth.blockscout.com/api/v2/transactions/${h}`); const conf=Number(t.confirmations||t.confirmation_count||0); return {status:conf?'Confirmed':'Pending',confirmations:conf,target:targets[c],block:t.block_number||'-',network,progress:Math.min(conf/targets[c]*100,100)}; }
 async function bsc(h){ const t=await json(`https://bsc.blockscout.com/api/v2/transactions/${h}`); const conf=Number(t.confirmations||t.confirmation_count||0); return {status:conf?'Confirmed':'Pending',confirmations:conf,target:12,block:t.block_number||'-',network:'BNB Smart Chain',progress:Math.min(conf/12*100,100)}; }
-async function sol(h){ const post={method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({jsonrpc:'2.0',id:1,method:'getTransaction',params:[h,{encoding:'jsonParsed',maxSupportedTransactionVersion:0}]})}; const t=(await fetch('https://api.mainnet-beta.solana.com',post)).json?await (await fetch('https://api.mainnet-beta.solana.com',post)).json():null; if(!t?.result)return {status:'Pending',confirmations:0,target:12,network:'Solana',block:'-',progress:0}; return {status:'Confirmed',confirmations:1,target:12,network:'Solana',block:`Slot ${t.result.slot||'-'}`,progress:8.33}; }
+async function sol(h){ const post={method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({jsonrpc:'2.0',id:1,method:'getTransaction',params:[h,{encoding:'jsonParsed',maxSupportedTransactionVersion:0}]})}; const r=await fetch('https://api.mainnet-beta.solana.com',post); const t=r.ok?await r.json():null; if(!t?.result)return {status:'Pending',confirmations:0,target:12,network:'Solana',block:'-',progress:0}; return {status:'Confirmed',confirmations:1,target:12,network:'Solana',block:`Slot ${t.result.slot||'-'}`,progress:8.33}; }
 async function tron(h){ const t=await json(`https://apilist.tronscanapi.com/api/transaction-info?hash=${encodeURIComponent(h)}`); const conf=Number(t.confirmations||0); return {status:conf?'Confirmed':'Pending',confirmations:conf,target:20,network:'TRON',block:t.blockNumber||'-',progress:Math.min(conf/20*100,100)}; }
 async function xrp(h){ const t=await json(`https://data.ripple.com/v2/transactions/${encodeURIComponent(h)}`); const ok=t.validated===true&&(!t.outcome||t.outcome.result==='tesSUCCESS'); return {status:ok?'Confirmed':'Pending',confirmations:ok?1:0,target:1,network:'XRP Ledger',block:t.ledger_index||'-',progress:ok?100:0}; }
 async function query(c,n,h){ const l=n.toLowerCase(); if(c==='BTC')return btc(h); if(c==='ETH')return blockscout(h,'Ethereum',c); if(c==='USDT')return l.includes('tron')?tron(h):l.includes('bep')?bsc(h):blockscout(h,'Ethereum (ERC20)',c); if(c==='BNB')return bsc(h); if(c==='SOL')return sol(h); if(c==='TRX')return tron(h); if(c==='XRP')return xrp(h); throw Error('This network is not available yet'); }
+function setNextRefresh(text){ if($('next-refresh')) $('next-refresh').textContent=text; }
+function updateLiveMeta(){ if(poller.lastUpdateMs){ const s=Math.max(0,Math.floor((Date.now()-poller.lastUpdateMs)/1000)); $('last-update').textContent=`${new Date(poller.lastUpdateMs).toLocaleTimeString()} (${s}s ago)`; } if(!poller.active) return; if(document.hidden){ setNextRefresh('Paused (tab hidden)'); return; } if(!poller.nextAt){ setNextRefresh('Waiting'); return; } const left=Math.max(0,Math.ceil((poller.nextAt-Date.now())/1000)); setNextRefresh(left===0?'Updating now…':`in ${left}s`); }
+function startTicker(){ if(poller.ticker) clearInterval(poller.ticker); poller.ticker=setInterval(updateLiveMeta,1000); updateLiveMeta(); }
+function stopTicker(){ if(!poller.active && poller.ticker){ clearInterval(poller.ticker); poller.ticker=null; } }
+function stopPolling(reason){ poller.active=false; poller.context=null; poller.inFlight=false; poller.nextAt=0; if(poller.timer){ clearTimeout(poller.timer); poller.timer=null; } if(reason) setNextRefresh(reason); stopTicker(); }
+function isFinal(result){ const target=Number(result.target || targets[poller.context?.coin] || 0); if(result.status==='Failed') return true; return result.status==='Confirmed' && Number(result.confirmations||0) >= target; }
+function nextInterval(result){ const conf=Number(result.confirmations||0); const target=Number(result.target || targets[poller.context?.coin] || 0); if(conf<=0) return POLL_INTERVAL_INITIAL_MS; if(target>0 && conf>=Math.max(1,target-1)) return POLL_INTERVAL_NEAR_MS; return POLL_INTERVAL_MID_MS; }
+function retryDelay(){ return Math.min(POLL_RETRY_BASE_MS * (2 ** Math.max(0,poller.retryCount-1)), POLL_RETRY_MAX_MS); }
+function isFatal(err){ const m=String(err?.message||'').toLowerCase(); return m.includes('api 404') || m.includes('not available yet'); }
+function scheduleNext(ms){ if(!poller.active) return; if(poller.timer) clearTimeout(poller.timer); if(document.hidden){ poller.nextAt=0; setNextRefresh('Paused (tab hidden)'); return; } poller.nextAt=Date.now()+Math.max(0,ms); poller.timer=setTimeout(runPoll,Math.max(0,ms)); updateLiveMeta(); }
+async function runPoll(){
+  if(!poller.active || document.hidden) return;
+  if(Date.now()-poller.startMs>MAX_MONITORING_MS){
+    stopPolling('Monitoring limit reached');
+    $('transaction-status').textContent='Monitoring paused — refresh manually';
+    $('status-pill').textContent='Idle';
+    $('status-pill').className='status-pill';
+    return;
+  }
+  if(poller.inFlight){ scheduleNext(2000); return; }
+  poller.inFlight=true;
+  const { coin:c, chain:n, hash:h } = poller.context;
+  try{
+    const result=await query(c,n,h);
+    poller.retryCount=0;
+    poller.lastUpdateMs=Date.now();
+    render(result,c,n,h);
+    if(isFinal(result)){ stopPolling('Monitoring complete'); return; }
+    scheduleNext(nextInterval(result));
+  }catch(err){
+    console.error(err);
+    if(isFatal(err)){
+      render({status:'Failed',progress:0,confirmations:0,target:targets[c],network:n,block:'-'},c,n,h);
+      stopPolling('Stopped (invalid hash / unsupported)');
+      return;
+    }
+    poller.retryCount+=1;
+    $('transaction-status').textContent=`Retrying after API error (${poller.retryCount})`;
+    $('status-pill').textContent='Retrying';
+    $('status-pill').className='status-pill retrying';
+    scheduleNext(retryDelay());
+  }finally{
+    poller.inFlight=false;
+  }
+}
+function startPolling(c,n,h){
+  stopPolling('Replaced by new transaction');
+  poller.active=true;
+  poller.context={ coin:c, chain:n, hash:h };
+  poller.startMs=Date.now();
+  poller.retryCount=0;
+  poller.lastUpdateMs=0;
+  setNextRefresh('Starting…');
+  startTicker();
+  scheduleNext(0);
+}
 coin.addEventListener('change',updateChains); updateChains();
-form.addEventListener('submit',async e=>{ e.preventDefault(); const c=coin.value,n=chain.value,h=$('tx-hash').value.trim(); if(!h)return; button.disabled=true; button.textContent='Checking…'; render({status:'Pending',progress:0,confirmations:0,target:targets[c],network:n,block:'-'},c,n,h); try{ render(await query(c,n,h),c,n,h); }catch(err){ console.error(err); render({status:'Failed',progress:0,confirmations:0,target:targets[c],network:n,block:'-'},c,n,h); }finally{button.disabled=false;button.textContent='Check transaction';} });
+document.addEventListener('visibilitychange',()=>{ if(!poller.active) return; if(document.hidden){ if(poller.timer){ clearTimeout(poller.timer); poller.timer=null; } poller.nextAt=0; updateLiveMeta(); return; } scheduleNext(1000); });
+form.addEventListener('submit',async e=>{ e.preventDefault(); const c=coin.value,n=chain.value,h=$('tx-hash').value.trim(); if(!h)return; button.disabled=true; button.textContent='Checking…'; render({status:'Pending',progress:0,confirmations:0,target:targets[c],network:n,block:'-'},c,n,h); startPolling(c,n,h); button.disabled=false; button.textContent='Check transaction'; });
