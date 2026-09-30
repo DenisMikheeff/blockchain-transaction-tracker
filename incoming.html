@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Incoming Wallet Transactions</title>
+    <meta
+      name="description"
+      content="Track incoming wallet transactions and confirmation status with free public blockchain APIs."
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="topbar">
+        <div class="brand-wrap">
+          <div class="brand-mark">₿</div>
+          <div>
+            <p class="eyebrow">Address monitor</p>
+            <h1>Incoming Wallet Transactions</h1>
+          </div>
+        </div>
+        <a class="secondary-link" href="index.html">Single transaction tracker</a>
+      </header>
+
+      <main class="app-card incoming-layout">
+        <form id="incoming-form" class="tracker-form">
+          <div class="field-group">
+            <label for="incoming-coin-select">Cryptocurrency</label>
+            <select id="incoming-coin-select" name="coin">
+              <option value="BTC">Bitcoin (BTC)</option>
+              <option value="ETH">Ethereum (ETH)</option>
+              <option value="USDT">Tether (USDT)</option>
+              <option value="BNB">BNB (BNB)</option>
+              <option value="TRX">TRON (TRX)</option>
+              <option value="XRP">XRP (XRP)</option>
+            </select>
+          </div>
+
+          <div class="field-group">
+            <label for="incoming-chain-select">Blockchain</label>
+            <select id="incoming-chain-select" name="chain"></select>
+          </div>
+
+          <div class="field-group">
+            <label for="wallet-address">Destination wallet</label>
+            <input
+              id="wallet-address"
+              name="walletAddress"
+              type="text"
+              autocomplete="off"
+              spellcheck="false"
+              placeholder="Paste destination wallet address"
+            />
+          </div>
+
+          <button type="submit" class="primary-btn">Find incoming transactions</button>
+        </form>
+
+        <section class="result-panel" aria-live="polite">
+          <div class="status-header">
+            <div>
+              <p class="label">Result</p>
+              <h2 id="incoming-status">Waiting for wallet query</h2>
+            </div>
+            <div class="status-pill" id="incoming-pill">Idle</div>
+          </div>
+
+          <div class="meta-list">
+            <div>
+              <span>Wallet</span>
+              <strong id="wallet-display">-</strong>
+            </div>
+            <div>
+              <span>Network</span>
+              <strong id="incoming-network">-</strong>
+            </div>
+            <div>
+              <span>Last update</span>
+              <strong id="incoming-last-update">Waiting</strong>
+            </div>
+          </div>
+
+          <div class="incoming-table-wrap">
+            <table class="incoming-table">
+              <thead>
+                <tr>
+                  <th>Tx hash</th>
+                  <th>Status</th>
+                  <th>Confirmations</th>
+                  <th>Progress</th>
+                  <th>Amount</th>
+                </tr>
+              </thead>
+              <tbody id="incoming-body">
+                <tr>
+                  <td colspan="5" class="empty-cell">
+                    No incoming transactions loaded yet.
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script src="incoming.js"></script>
+  </body>
+</html>
