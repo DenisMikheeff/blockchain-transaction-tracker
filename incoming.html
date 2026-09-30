@@ -60,7 +60,20 @@
             />
           </div>
 
-          <button type="submit" class="primary-btn">Find incoming transactions</button>
+          <div class="field-group">
+            <label for="poll-interval">Polling interval (seconds)</label>
+            <input
+              id="poll-interval"
+              name="pollInterval"
+              type="number"
+              min="5"
+              max="300"
+              value="20"
+            />
+          </div>
+
+          <button type="submit" class="primary-btn">Start listening</button>
+          <button type="button" id="stop-listening" class="secondary-btn" disabled>Stop listening</button>
         </form>
 
         <section class="result-panel" aria-live="polite">
@@ -84,6 +97,10 @@
             <div>
               <span>Last update</span>
               <strong id="incoming-last-update">Waiting</strong>
+            </div>
+            <div>
+              <span>Next poll</span>
+              <strong id="incoming-next-poll">Waiting</strong>
             </div>
           </div>
 
