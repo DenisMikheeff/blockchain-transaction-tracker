@@ -19,6 +19,7 @@ const ERC20_USDT_CONTRACT = '0xdac17f958d2ee523a2206206994597c13d831ec7';
 const BEP20_USDT_CONTRACT = '0x55d398326f99059ff775485246999027b3197955';
 const MIN_POLL_INTERVAL_MS = 5000;
 const MAX_POLL_INTERVAL_MS = 300000;
+const API_TIMEOUT_MS = 15000;
 
 const $$ = (id) => document.getElementById(id);
 const coin = $$('incoming-coin-select');
@@ -150,9 +151,26 @@ function setButtons(isListening) {
 }
 
 async function json(url, options = {}) {
-  const response = await fetch(url, { headers: { Accept: 'application/json' }, ...options });
-  if (!response.ok) throw new Error(`API ${response.status}`);
-  return response.json();
+  const { timeoutMs = API_TIMEOUT_MS, ...fetchOptions } = options;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let response;
+  try {
+    response = await fetch(url, { headers: { Accept: 'application/json' }, signal: controller.signal, ...fetchOptions });
+  } catch (error) {
+    clearTimeout(timer);
+    const reason = error?.name === 'AbortError' ? 'Request timeout' : 'Network/CORS issue';
+    throw new Error(`${reason} (${new URL(url).hostname})`);
+  }
+  clearTimeout(timer);
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status} ${response.statusText || ''}`.trim());
+  }
+  try {
+    return await response.json();
+  } catch {
+    throw new Error('Invalid JSON response');
+  }
 }
 
 async function btcIncoming(address) {
@@ -298,13 +316,48 @@ function tronUsdtRows(list, address, target) {
 }
 
 async function tronUsdtTrc20Activity(address, target) {
-  const [toPayload, fromPayload] = await Promise.all([
-    json(`https://apilist.tronscanapi.com/api/token_trc20/transfers?limit=25&start=0&toAddress=${encodeURIComponent(address)}&trc20Id=${TRC20_USDT_CONTRACT}`),
-    json(`https://apilist.tronscanapi.com/api/token_trc20/transfers?limit=25&start=0&fromAddress=${encodeURIComponent(address)}&trc20Id=${TRC20_USDT_CONTRACT}`)
-  ]);
-  const toList = Array.isArray(toPayload?.token_transfers) ? toPayload.token_transfers : Array.isArray(toPayload?.data) ? toPayload.data : [];
-  const fromList = Array.isArray(fromPayload?.token_transfers) ? fromPayload.token_transfers : Array.isArray(fromPayload?.data) ? fromPayload.data : [];
-  return mergeByHash(tronUsdtRows(toList, address, target), tronUsdtRows(fromList, address, target));
+  try {
+    const [toPayload, fromPayload] = await Promise.all([
+      json(`https://apilist.tronscanapi.com/api/token_trc20/transfers?limit=25&start=0&toAddress=${encodeURIComponent(address)}&trc20Id=${TRC20_USDT_CONTRACT}`),
+      json(`https://apilist.tronscanapi.com/api/token_trc20/transfers?limit=25&start=0&fromAddress=${encodeURIComponent(address)}&trc20Id=${TRC20_USDT_CONTRACT}`)
+    ]);
+    const toList = Array.isArray(toPayload?.token_transfers) ? toPayload.token_transfers : Array.isArray(toPayload?.data) ? toPayload.data : [];
+    const fromList = Array.isArray(fromPayload?.token_transfers) ? fromPayload.token_transfers : Array.isArray(fromPayload?.data) ? fromPayload.data : [];
+    return mergeByHash(tronUsdtRows(toList, address, target), tronUsdtRows(fromList, address, target));
+  } catch (tronscanError) {
+    console.warn('Tronscan TRC20 failed, trying Trongrid fallback', tronscanError);
+  }
+
+  try {
+    const payload = await json(`https://api.trongrid.io/v1/accounts/${encodeURIComponent(address)}/transactions/trc20?limit=25&contract_address=${TRC20_USDT_CONTRACT}`);
+    const list = Array.isArray(payload?.data) ? payload.data : [];
+    return list
+      .map((tx) => {
+        const fromAddress = tx.from;
+        const toAddress = tx.to;
+        if (!sameAddress(fromAddress, address) && !sameAddress(toAddress, address)) return null;
+        const direction = directionFromTransfer(fromAddress, toAddress, address);
+        const conf = tx.confirmed === true ? 1 : toNum(tx.confirmations);
+        const decimals = toNum(tx.token_info?.decimals ?? 6);
+        return {
+          hash: tx.transaction_id || tx.hash,
+          direction,
+          status: conf > 0 ? 'Confirmed' : 'Pending',
+          confirmations: conf,
+          target,
+          amount: tx.value ? signedAmount(toAmountText(tx.value, decimals, 'USDT'), direction) : '-',
+          timestamp: parseTimestamp(tx.block_timestamp || tx.timestamp)
+        };
+      })
+      .filter((item) => item?.hash);
+  } catch (trongridError) {
+    throw new Error(`TRON providers unavailable: ${trongridError.message}`);
+  }
+}
+
+function shortError(error) {
+  const text = String(error?.message || 'Unknown API issue');
+  return text.length > 90 ? `${text.slice(0, 87)}...` : text;
 }
 
 async function xrpIncoming(address) {
@@ -465,9 +518,9 @@ async function runPoll() {
   if (!monitor.active || monitor.inFlight || !monitor.context) return;
   monitor.inFlight = true;
   const { coinValue, chainValue, address, intervalMs } = monitor.context;
+  setMeta(coinValue, chainValue, address);
   try {
     const fetched = sortedByNewest(await fetchIncoming(coinValue, chainValue, address));
-    setMeta(coinValue, chainValue, address);
 
     if (!monitor.lastSeenHash && !monitor.lastSeenTimestamp) {
       monitor.rows = fetched.slice(0, 50);
@@ -495,9 +548,10 @@ async function runPoll() {
   } catch (error) {
     console.error(error);
     monitor.errorCount += 1;
-    renderStatus(`API issue, retrying (${monitor.errorCount})`, 'retrying');
+    const reason = shortError(error);
+    renderStatus(`API issue: ${reason} • retrying (${monitor.errorCount})`, 'retrying');
     if (!monitor.rows.length) {
-      renderEmpty('Temporary API issue while listening. Retrying automatically...');
+      renderEmpty(`Temporary API issue: ${reason}. Retrying automatically...`);
     }
     scheduleNextPoll(Math.min(toNum(monitor.context?.intervalMs) || 20000, 10000));
   } finally {
