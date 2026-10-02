@@ -49,14 +49,14 @@
           </div>
 
           <div class="field-group">
-            <label for="wallet-address">Destination wallet</label>
+            <label for="wallet-address">Wallet address</label>
             <input
               id="wallet-address"
               name="walletAddress"
               type="text"
               autocomplete="off"
               spellcheck="false"
-              placeholder="Paste destination wallet address"
+              placeholder="Paste wallet address"
             />
           </div>
 
@@ -109,6 +109,7 @@
               <thead>
                 <tr>
                   <th>Tx hash</th>
+                  <th>Direction</th>
                   <th>Status</th>
                   <th>Confirmations</th>
                   <th>Progress</th>
@@ -117,8 +118,8 @@
               </thead>
               <tbody id="incoming-body">
                 <tr>
-                  <td colspan="5" class="empty-cell">
-                    No incoming transactions loaded yet.
+                  <td colspan="6" class="empty-cell">
+                    No wallet transactions loaded yet.
                   </td>
                 </tr>
               </tbody>
