@@ -173,10 +173,23 @@ async function json(url, options = {}) {
   }
 }
 
-async function btcIncoming(address) {
+async function firstSuccess(providers, context = 'providers') {
+  const errors = [];
+  for (const provider of providers) {
+    try {
+      return await provider();
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+  const message = errors.map((error) => error?.message || String(error)).join(' | ');
+  throw new Error(`${context} unavailable${message ? `: ${message}` : ''}`);
+}
+
+async function btcIncomingFrom(base, address) {
   const [txs, tip] = await Promise.all([
-    json(`https://mempool.space/api/address/${encodeURIComponent(address)}/txs`),
-    json('https://mempool.space/api/blocks/tip/height')
+    json(`${base}/address/${encodeURIComponent(address)}/txs`),
+    json(`${base}/blocks/tip/height`)
   ]);
   return (Array.isArray(txs) ? txs : [])
     .map((tx) => {
@@ -208,9 +221,17 @@ async function btcIncoming(address) {
     .filter(Boolean);
 }
 
-async function evmNativeActivity(address, apiBase, symbol, target) {
-  const payload = await json(`${apiBase}/api/v2/addresses/${encodeURIComponent(address)}/transactions`);
-  const items = Array.isArray(payload?.items) ? payload.items : [];
+async function btcIncoming(address) {
+  return firstSuccess(
+    [
+      () => btcIncomingFrom('https://mempool.space/api', address),
+      () => btcIncomingFrom('https://blockstream.info/api', address)
+    ],
+    'Bitcoin APIs'
+  );
+}
+
+function evmNativeFromV2(items, address, symbol, target) {
   return items
     .map((item) => {
       const fromAddress = item.from?.hash || item.from_address_hash || item.from;
@@ -232,9 +253,37 @@ async function evmNativeActivity(address, apiBase, symbol, target) {
     .filter((item) => item?.hash);
 }
 
-async function evmUsdtActivity(address, apiBase, target, contractAddress) {
-  const payload = await json(`${apiBase}/api/v2/addresses/${encodeURIComponent(address)}/token-transfers`);
-  const list = Array.isArray(payload?.items) ? payload.items : [];
+async function evmNativeActivity(address, apiBases, symbol, target) {
+  const providers = apiBases.map((apiBase) => async () => {
+    const payload = await json(`${apiBase}/api/v2/addresses/${encodeURIComponent(address)}/transactions`);
+    return evmNativeFromV2(Array.isArray(payload?.items) ? payload.items : [], address, symbol, target);
+  });
+  providers.push(async () => {
+    const payload = await json(`${apiBases[0]}/api?module=account&action=txlist&address=${encodeURIComponent(address)}&sort=desc&offset=25&page=1`);
+    const items = Array.isArray(payload?.result) ? payload.result : [];
+    return items
+      .map((item) => {
+        const fromAddress = item.from;
+        const toAddress = item.to;
+        if (!sameAddress(fromAddress, address) && !sameAddress(toAddress, address)) return null;
+        const direction = directionFromTransfer(fromAddress, toAddress, address);
+        const conf = toNum(item.confirmations);
+        return {
+          hash: item.hash,
+          direction,
+          status: conf > 0 ? 'Confirmed' : 'Pending',
+          confirmations: conf,
+          target,
+          amount: signedAmount(toAmountText(item.value, 18, symbol), direction),
+          timestamp: parseTimestamp(item.timeStamp || item.timestamp)
+        };
+      })
+      .filter((item) => item?.hash);
+  });
+  return firstSuccess(providers, `${symbol} APIs`);
+}
+
+function evmUsdtFromV2(list, address, target, contractAddress) {
   return list
     .filter((item) => sameAddress(item.token?.address || item.token?.hash, contractAddress))
     .map((item) => {
@@ -253,6 +302,59 @@ async function evmUsdtActivity(address, apiBase, target, contractAddress) {
         target,
         amount: signedAmount(toAmountText(amountRaw, decimals, 'USDT'), direction),
         timestamp: parseTimestamp(item.timestamp || item.block_timestamp || item.transaction?.timestamp)
+      };
+    })
+    .filter((item) => item?.hash);
+}
+
+async function evmUsdtActivity(address, apiBases, target, contractAddress) {
+  const providers = apiBases.map((apiBase) => async () => {
+    const payload = await json(`${apiBase}/api/v2/addresses/${encodeURIComponent(address)}/token-transfers`);
+    return evmUsdtFromV2(Array.isArray(payload?.items) ? payload.items : [], address, target, contractAddress)
+      .filter((item) => item?.hash);
+  });
+  providers.push(async () => {
+    const payload = await json(`${apiBases[0]}/api?module=account&action=tokentx&address=${encodeURIComponent(address)}&contractaddress=${contractAddress}&sort=desc&offset=25&page=1`);
+    const list = Array.isArray(payload?.result) ? payload.result : [];
+    return list
+      .map((item) => {
+        const fromAddress = item.from;
+        const toAddress = item.to;
+        if (!sameAddress(fromAddress, address) && !sameAddress(toAddress, address)) return null;
+        const direction = directionFromTransfer(fromAddress, toAddress, address);
+        const conf = toNum(item.confirmations);
+        return {
+          hash: item.hash,
+          direction,
+          status: conf > 0 ? 'Confirmed' : 'Pending',
+          confirmations: conf,
+          target,
+          amount: signedAmount(toAmountText(item.value, toNum(item.tokenDecimal ?? 6), 'USDT'), direction),
+          timestamp: parseTimestamp(item.timeStamp || item.timestamp)
+        };
+      })
+      .filter((item) => item?.hash);
+  });
+  return firstSuccess(providers, 'USDT APIs');
+}
+
+function tronRowsFromTrongrid(list, address, target, symbol) {
+  return list
+    .map((tx) => {
+      const owner = tx.raw_data?.contract?.[0]?.parameter?.value?.owner_address || tx.ownerAddress || tx.from || tx.fromAddress;
+      const to = tx.raw_data?.contract?.[0]?.parameter?.value?.to_address || tx.toAddress || tx.to;
+      if (!sameAddress(owner, address) && !sameAddress(to, address)) return null;
+      const direction = directionFromTransfer(owner, to, address);
+      const conf = tx.ret?.[0]?.contractRet === 'SUCCESS' && tx.blockNumber ? 1 : 0;
+      const amountSun = tx.raw_data?.contract?.[0]?.parameter?.value?.amount;
+      return {
+        hash: tx.txID || tx.hash,
+        direction,
+        status: conf > 0 ? 'Confirmed' : 'Pending',
+        confirmations: conf,
+        target,
+        amount: amountSun ? signedAmount(toAmountText(amountSun, 6, symbol), direction) : '-',
+        timestamp: parseTimestamp(tx.block_timestamp || tx.raw_data?.timestamp)
       };
     })
     .filter((item) => item?.hash);
@@ -282,13 +384,22 @@ function tronRows(list, address, target, symbol) {
 }
 
 async function tronActivity(address, target, symbol) {
-  const [toPayload, fromPayload] = await Promise.all([
-    json(`https://apilist.tronscanapi.com/api/transaction?sort=-timestamp&count=true&limit=25&start=0&toAddress=${encodeURIComponent(address)}`),
-    json(`https://apilist.tronscanapi.com/api/transaction?sort=-timestamp&count=true&limit=25&start=0&fromAddress=${encodeURIComponent(address)}`)
-  ]);
-  const toList = Array.isArray(toPayload?.data) ? toPayload.data : [];
-  const fromList = Array.isArray(fromPayload?.data) ? fromPayload.data : [];
-  return mergeByHash(tronRows(toList, address, target, symbol), tronRows(fromList, address, target, symbol));
+  return firstSuccess([
+    async () => {
+      const [toPayload, fromPayload] = await Promise.all([
+        json(`https://apilist.tronscanapi.com/api/transaction?sort=-timestamp&count=true&limit=25&start=0&toAddress=${encodeURIComponent(address)}`),
+        json(`https://apilist.tronscanapi.com/api/transaction?sort=-timestamp&count=true&limit=25&start=0&fromAddress=${encodeURIComponent(address)}`)
+      ]);
+      const toList = Array.isArray(toPayload?.data) ? toPayload.data : [];
+      const fromList = Array.isArray(fromPayload?.data) ? fromPayload.data : [];
+      return mergeByHash(tronRows(toList, address, target, symbol), tronRows(fromList, address, target, symbol));
+    },
+    async () => {
+      const payload = await json(`https://api.trongrid.io/v1/accounts/${encodeURIComponent(address)}/transactions?limit=25&order_by=block_timestamp,desc`);
+      const list = Array.isArray(payload?.data) ? payload.data : [];
+      return tronRowsFromTrongrid(list, address, target, symbol);
+    }
+  ], 'TRON APIs');
 }
 
 function tronUsdtRows(list, address, target) {
@@ -361,35 +472,59 @@ function shortError(error) {
 }
 
 async function xrpIncoming(address) {
-  const payload = await json(`https://data.ripple.com/v2/accounts/${encodeURIComponent(address)}/transactions?type=Payment&limit=25`);
-  const list = Array.isArray(payload?.transactions) ? payload.transactions : [];
-  return list
-    .filter((item) => item?.tx?.Destination === address)
-    .map((item) => {
-      const ok = item.validated === true && item.tx?.TransactionResult === 'tesSUCCESS';
-      return {
-        hash: item.tx?.hash,
-        direction: 'IN',
-        status: ok ? 'Confirmed' : 'Pending',
-        confirmations: ok ? 1 : 0,
-        target: 1,
-        amount: item.tx?.Amount ? `${item.tx.Amount} drops` : '-',
-        timestamp: parseTimestamp(item.date || item.tx?.date)
-      };
-    })
-    .filter((item) => item.hash);
+  return firstSuccess([
+    async () => {
+      const payload = await json(`https://data.ripple.com/v2/accounts/${encodeURIComponent(address)}/transactions?type=Payment&limit=25`);
+      const list = Array.isArray(payload?.transactions) ? payload.transactions : [];
+      return list
+        .filter((item) => item?.tx?.Destination === address)
+        .map((item) => {
+          const ok = item.validated === true && item.tx?.TransactionResult === 'tesSUCCESS';
+          return {
+            hash: item.tx?.hash,
+            direction: 'IN',
+            status: ok ? 'Confirmed' : 'Pending',
+            confirmations: ok ? 1 : 0,
+            target: 1,
+            amount: item.tx?.Amount ? `${item.tx.Amount} drops` : '-',
+            timestamp: parseTimestamp(item.date || item.tx?.date)
+          };
+        })
+        .filter((item) => item.hash);
+    },
+    async () => {
+      const payload = await json(`https://api.xrpscan.com/api/v1/account/${encodeURIComponent(address)}/transactions?type=Payment&limit=25`);
+      const list = Array.isArray(payload?.transactions) ? payload.transactions : [];
+      return list
+        .filter((item) => sameAddress(item?.destination, address) || sameAddress(item?.tx?.Destination, address))
+        .map((item) => {
+          const ok = item?.validated === true || item?.tx?.validated === true;
+          const amount = item?.destination_balance_changes?.[0]?.value || item?.tx?.Amount;
+          return {
+            hash: item?.hash || item?.tx?.hash,
+            direction: 'IN',
+            status: ok ? 'Confirmed' : 'Pending',
+            confirmations: ok ? 1 : 0,
+            target: 1,
+            amount: amount ? `${amount} XRP` : '-',
+            timestamp: parseTimestamp(item?.date || item?.tx?.date || item?.executed_time)
+          };
+        })
+        .filter((item) => item.hash);
+    }
+  ], 'XRP APIs');
 }
 
 async function fetchIncoming(coinValue, chainValue, address) {
   const reqChain = chainForRequest(coinValue, chainValue);
   if (reqChain === 'BTC') return btcIncoming(address);
   if (reqChain === 'ETH') {
-    if (coinValue === 'USDT') return evmUsdtActivity(address, 'https://eth.blockscout.com', targetFor(coinValue, chainValue), ERC20_USDT_CONTRACT);
-    return evmNativeActivity(address, 'https://eth.blockscout.com', 'ETH', targetFor(coinValue, chainValue));
+    if (coinValue === 'USDT') return evmUsdtActivity(address, ['https://eth.blockscout.com'], targetFor(coinValue, chainValue), ERC20_USDT_CONTRACT);
+    return evmNativeActivity(address, ['https://eth.blockscout.com'], 'ETH', targetFor(coinValue, chainValue));
   }
   if (reqChain === 'BSC') {
-    if (coinValue === 'USDT') return evmUsdtActivity(address, 'https://bsc.blockscout.com', targetFor(coinValue, chainValue), BEP20_USDT_CONTRACT);
-    return evmNativeActivity(address, 'https://bsc.blockscout.com', 'BNB', targetFor(coinValue, chainValue));
+    if (coinValue === 'USDT') return evmUsdtActivity(address, ['https://bsc.blockscout.com'], targetFor(coinValue, chainValue), BEP20_USDT_CONTRACT);
+    return evmNativeActivity(address, ['https://bsc.blockscout.com'], 'BNB', targetFor(coinValue, chainValue));
   }
   if (reqChain === 'TRON_USDT_TRC20') return tronUsdtTrc20Activity(address, targetFor(coinValue, chainValue));
   if (reqChain === 'TRX') return tronActivity(address, targetFor(coinValue, chainValue), 'TRX');
