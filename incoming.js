@@ -382,6 +382,24 @@ function sortedByNewest(list) {
   });
 }
 
+function isFinishedTransaction(item) {
+  if (!item) return false;
+  if (item.status === 'Failed') return true;
+  return toNum(item.confirmations) >= Math.max(1, toNum(item.target));
+}
+
+function listeningRows(list) {
+  const ordered = sortedByNewest(list);
+  const inProgress = ordered.filter((item) => !isFinishedTransaction(item));
+  const finished = ordered.filter((item) => isFinishedTransaction(item));
+  const latestIncoming = finished.find((item) => item.direction !== 'OUT');
+  const latestOutgoing = finished.find((item) => item.direction === 'OUT');
+  const selected = [...inProgress];
+  if (latestIncoming) selected.push(latestIncoming);
+  if (latestOutgoing && latestOutgoing.hash !== latestIncoming?.hash) selected.push(latestOutgoing);
+  return sortedByNewest(selected);
+}
+
 function updateLastSeen(list) {
   if (!list.length) return;
   const newest = list[0];
@@ -453,19 +471,20 @@ async function runPoll() {
 
     if (!monitor.lastSeenHash && !monitor.lastSeenTimestamp) {
       monitor.rows = fetched.slice(0, 50);
-      drawRows(monitor.rows, coinValue, chainValue);
+      drawRows(listeningRows(monitor.rows), coinValue, chainValue);
       updateLastSeen(fetched);
       renderStatus(monitor.rows.length ? 'Listening' : 'Listening (no transactions yet)');
     } else {
       const fresh = extractNewRows(fetched);
       if (fresh.length) {
         monitor.rows = [...fresh, ...monitor.rows].slice(0, 50);
-        drawRows(monitor.rows, coinValue, chainValue);
+        drawRows(listeningRows(monitor.rows), coinValue, chainValue);
         renderStatus(`Listening • ${fresh.length} new`, 'confirmed');
       } else if (!monitor.rows.length) {
         drawRows([], coinValue, chainValue);
         renderStatus('Listening (no transactions yet)');
       } else {
+        drawRows(listeningRows(monitor.rows), coinValue, chainValue);
         renderStatus('Listening');
       }
       updateLastSeen(fetched);
