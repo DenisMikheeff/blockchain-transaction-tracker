@@ -471,22 +471,34 @@ function shortError(error) {
   return text.length > 90 ? `${text.slice(0, 87)}...` : text;
 }
 
-async function xrpIncoming(address) {
+function xrpAmountText(value) {
+  if (value === null || value === undefined) return '-';
+  if (typeof value === 'string' || typeof value === 'number') return `${value} XRP`;
+  if (typeof value === 'object') {
+    const amount = value.value ?? value.amount;
+    const currency = value.currency || 'XRP';
+    if (amount !== undefined && amount !== null) return `${amount} ${currency}`;
+  }
+  return '-';
+}
+
+async function xrpActivity(address) {
   return firstSuccess([
     async () => {
       const payload = await json(`https://data.ripple.com/v2/accounts/${encodeURIComponent(address)}/transactions?type=Payment&limit=25`);
       const list = Array.isArray(payload?.transactions) ? payload.transactions : [];
       return list
-        .filter((item) => item?.tx?.Destination === address)
+        .filter((item) => sameAddress(item?.tx?.Account, address) || sameAddress(item?.tx?.Destination, address))
         .map((item) => {
           const ok = item.validated === true && item.tx?.TransactionResult === 'tesSUCCESS';
+          const direction = directionFromTransfer(item?.tx?.Account, item?.tx?.Destination, address);
           return {
             hash: item.tx?.hash,
-            direction: 'IN',
+            direction,
             status: ok ? 'Confirmed' : 'Pending',
             confirmations: ok ? 1 : 0,
             target: 1,
-            amount: item.tx?.Amount ? `${item.tx.Amount} drops` : '-',
+            amount: signedAmount(xrpAmountText(item.tx?.Amount), direction),
             timestamp: parseTimestamp(item.date || item.tx?.date)
           };
         })
@@ -496,17 +508,26 @@ async function xrpIncoming(address) {
       const payload = await json(`https://api.xrpscan.com/api/v1/account/${encodeURIComponent(address)}/transactions?type=Payment&limit=25`);
       const list = Array.isArray(payload?.transactions) ? payload.transactions : [];
       return list
-        .filter((item) => sameAddress(item?.destination, address) || sameAddress(item?.tx?.Destination, address))
+        .filter((item) =>
+          sameAddress(item?.source, address) ||
+          sameAddress(item?.Account, address) ||
+          sameAddress(item?.tx?.Account, address) ||
+          sameAddress(item?.destination, address) ||
+          sameAddress(item?.tx?.Destination, address)
+        )
         .map((item) => {
           const ok = item?.validated === true || item?.tx?.validated === true;
-          const amount = item?.destination_balance_changes?.[0]?.value || item?.tx?.Amount;
+          const amount = item?.destination_balance_changes?.[0]?.value || item?.source_balance_changes?.[0]?.value || item?.tx?.Amount;
+          const fromAddress = item?.source || item?.Account || item?.tx?.Account;
+          const toAddress = item?.destination || item?.Destination || item?.tx?.Destination;
+          const direction = directionFromTransfer(fromAddress, toAddress, address);
           return {
             hash: item?.hash || item?.tx?.hash,
-            direction: 'IN',
+            direction,
             status: ok ? 'Confirmed' : 'Pending',
             confirmations: ok ? 1 : 0,
             target: 1,
-            amount: amount ? `${amount} XRP` : '-',
+            amount: signedAmount(xrpAmountText(amount), direction),
             timestamp: parseTimestamp(item?.date || item?.tx?.date || item?.executed_time)
           };
         })
@@ -528,7 +549,7 @@ async function fetchIncoming(coinValue, chainValue, address) {
   }
   if (reqChain === 'TRON_USDT_TRC20') return tronUsdtTrc20Activity(address, targetFor(coinValue, chainValue));
   if (reqChain === 'TRX') return tronActivity(address, targetFor(coinValue, chainValue), 'TRX');
-  if (reqChain === 'XRP') return xrpIncoming(address);
+  if (reqChain === 'XRP') return xrpActivity(address);
   throw new Error('This network is not available yet');
 }
 
