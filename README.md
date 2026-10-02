@@ -6,6 +6,6 @@ Supported currencies include BTC, ETH, USDT, SOL, BNB, ADA, DOGE, XRP, TRX, and 
 
 The browser calls public APIs directly. API availability and rate limits may change.
 
-Also includes a separate incoming-wallet page (`incoming.html`) that finds incoming transactions by destination wallet address and shows confirmation status for supported networks (BTC, ETH/ERC20, BNB/BEP20, TRON/TRC20, XRP).
+Also includes a separate incoming-wallet page (`incoming.html`) that listens to wallet activity (incoming and outgoing transactions) and shows confirmation status for supported networks (BTC, ETH/ERC20, BNB/BEP20, TRON/TRC20, XRP).
 
 https://denismikheeff.github.io/blockchain-transaction-tracker/
